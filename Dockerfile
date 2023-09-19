@@ -6,7 +6,7 @@ COPY . .
 
 RUN go mod download
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o main -buildvcs=false
+RUN go build -o main -buildvcs=false
 
 FROM alpine:latest
 

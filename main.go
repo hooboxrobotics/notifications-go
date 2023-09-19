@@ -39,6 +39,7 @@ func handleNotification(w http.ResponseWriter, r *http.Request) {
 	p := new(dto.EmitNotification)
 
 	if err := json.NewDecoder(r.Body).Decode(p); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -72,8 +73,9 @@ func handleNotification(w http.ResponseWriter, r *http.Request) {
 					out, err := json.Marshal(struct {
 						IdNotification string
 						ClientId       string
-						Payload        map[string]string
-					}{IdNotification: idNotification, ClientId: clientId, Payload: p.Payload})
+						Subject        string
+						Payload        map[string]interface{}
+					}{IdNotification: idNotification, ClientId: clientId, Payload: p.Payload, Subject: p.Subject})
 					if err != nil {
 						log.Fatalln(err)
 					}
