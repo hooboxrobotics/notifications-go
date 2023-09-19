@@ -89,12 +89,13 @@ func handleNotification(w http.ResponseWriter, r *http.Request) {
 
 func handleNotificationAck(w http.ResponseWriter, r *http.Request) {
 	ack := new(dto.Ack)
-
 	if err := json.NewDecoder(r.Body).Decode(ack); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	ongoingNotifications[ack.IdCompany][ack.IdClient][ack.IdNotification].close <- true
+	go func() {
+		ongoingNotifications[ack.IdCompany][ack.IdClient][ack.IdNotification].close <- true
+	}()
 }
 
 func handleSse(w http.ResponseWriter, r *http.Request) {
