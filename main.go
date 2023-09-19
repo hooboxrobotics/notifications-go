@@ -69,7 +69,11 @@ func handleNotification(w http.ResponseWriter, r *http.Request) {
 					return
 				case <-time.After(time.Duration(n.Pulse) * time.Second):
 					fmt.Println("sending to client", clientId, ". total clients", len(client.Clients[p.IdCompany]))
-					out, err := json.Marshal(map[string]string{idNotification: idNotification, clientId: clientId})
+					out, err := json.Marshal(struct {
+						IdNotification string
+						ClientId       string
+						Payload        map[string]string
+					}{IdNotification: idNotification, ClientId: clientId, Payload: p.Payload})
 					if err != nil {
 						log.Fatalln(err)
 					}
