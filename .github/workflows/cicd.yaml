@@ -1,0 +1,28 @@
+name: build and push container
+
+on:
+  push:
+    branches:
+    - "develop"
+    - "staging"
+    - "main"
+  workflow_dispatch:
+
+jobs:
+  cicd:
+    uses: hooboxrobotics/infra-github-actions/.github/workflows/cicd.yaml@51463cc872cce069301979730f64b33534da948f
+    with:
+      run_ci: true
+      run_cd: true
+      domain: "hoobox.one"
+      database_enabled: true
+      bucket_enabled: true
+      helm_repository: "hooboxrobotics/infra-helm-apps"
+      create_ingress: true
+      container_registry: "hooboxone.azurecr.io"
+      force_tests_to_pass: true
+    secrets:
+      CONTAINER_REGISTRY_USER: ${{ secrets.CONTAINER_REGISTRY_USER }}
+      CONTAINER_REGISTRY_PASS: ${{ secrets.CONTAINER_REGISTRY_PASS }}
+      GIT_HELM_SSK_KEY: ${{ secrets.GIT_HELM_SSK_KEY }}
+      KUBERNETES_CONFIG: ${{ secrets.KUBERNETES_CONFIG }}NOTIFICATIONS_API_HOST
