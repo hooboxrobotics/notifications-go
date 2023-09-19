@@ -10,7 +10,7 @@ on:
 
 jobs:
   cicd:
-    uses: hooboxrobotics/infra-github-actions/.github/workflows/cicd.yaml@1d72ed7a838dc742a50f75caf1616703fa57e1d5    
+    uses: hooboxrobotics/infra-github-actions/.github/workflows/cicd.yaml@9c909db56650ee08f93662b12d2d6e163ff90c5f    
     with:
       run_ci: true
       run_cd: true
