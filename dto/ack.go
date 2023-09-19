@@ -1,6 +1,7 @@
 package dto
 
 type Ack struct {
-	Id         string `json:"id"`
-	Id_Company string `json:"id_company"`
+	IdNotification string `json:"id_notification"`
+	IdClient       string `json:"id_client"`
+	IdCompany      string `json:"id_company"`
 }

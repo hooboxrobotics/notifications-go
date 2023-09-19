@@ -8,28 +8,31 @@ import (
 	"net/http"
 	"time"
 
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/schema"
 )
 
 var (
-	ongoingNotifications = make(map[string](map[string]struct{ close chan bool }))
+	ongoingNotifications = make(map[string](map[string]map[string]struct{ close chan bool }))
 )
 
 type Broker struct {
 	Notifier       map[string]chan string
-	MasterNotifier chan struct{ Id_Company string }
-	NewClients     chan struct {
-		Id_Company  string
-		Destination string
+	MasterNotifier chan struct {
+		IdCompany      string
+		IdNotification string
+		Payload        map[string]string
+	}
+	NewClients chan struct {
+		IdCompany string
+		IdClient  string
 	}
 	ClosingClients chan struct {
-		Id_Company  string
-		Destination string
+		IdCompany string
+		IdClient  string
 	}
-	Clients map[string][]chan string
+	Clients map[string]map[string]chan []byte
 }
 
 func handleNotification(w http.ResponseWriter, r *http.Request) {
@@ -39,28 +42,43 @@ func handleNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	idNotification := uuid.NewString()
-
-	if _, ok := ongoingNotifications[p.Id_Company]; !ok {
-		ongoingNotifications[p.Id_Company] = make(map[string]struct{ close chan bool })
+	if _, ok := ongoingNotifications[p.IdCompany]; !ok {
+		ongoingNotifications[p.IdCompany] = make(map[string]map[string]struct{ close chan bool })
 	}
-
-	ongoingNotifications[p.Id_Company][p.Destination] = struct{ close chan bool }{close: make(chan bool)}
-
-	go func(n *dto.EmitNotification, ch struct{ close chan bool }) {
-		for {
-			select {
-			case _ = <-ch.close:
-				fmt.Println("closing notification", idNotification, "to", n.Destination, "...")
-				return
-			case <-time.After(time.Duration(n.Pulse) * time.Second):
-				fmt.Println("sending to master", n.Id_Company)
-				client.MasterNotifier <- struct{ Id_Company string }{n.Id_Company}
-			}
+	if p.ExpiresInSeconds == 0 {
+		p.ExpiresInSeconds = 30
+	}
+	idNotification := uuid.NewString()
+	for clientId := range client.Clients[p.IdCompany] {
+		nchan := struct{ close chan bool }{close: make(chan bool)}
+		if _, ok := ongoingNotifications[p.IdCompany][clientId]; !ok {
+			ongoingNotifications[p.IdCompany][clientId] = make(map[string]struct{ close chan bool })
 		}
-	}(p, ongoingNotifications[p.Id_Company][p.Destination])
+		ongoingNotifications[p.IdCompany][clientId][idNotification] = nchan
 
-	return
+		go func(n *dto.EmitNotification, clientId string, ch struct{ close chan bool }) {
+			timeout := time.After(time.Duration(n.ExpiresInSeconds) * time.Second)
+
+			for {
+				select {
+				case <-ch.close:
+					fmt.Println("closing notification", idNotification, "to", clientId, "...")
+					return
+				case <-timeout:
+					fmt.Println("notification", idNotification, "to", clientId, "expired. closing...")
+					return
+				case <-time.After(time.Duration(n.Pulse) * time.Second):
+					fmt.Println("sending to client", clientId, ". total clients", len(client.Clients[p.IdCompany]))
+					out, err := json.Marshal(map[string]string{idNotification: idNotification, clientId: clientId})
+					if err != nil {
+						log.Fatalln(err)
+					}
+
+					client.Clients[p.IdCompany][clientId] <- out
+				}
+			}
+		}(p, clientId, nchan)
+	}
 }
 
 func handleNotificationAck(w http.ResponseWriter, r *http.Request) {
@@ -70,13 +88,11 @@ func handleNotificationAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ongoingNotifications[ack.Id_Company][ack.Id].close <- true
-
-	return
+	ongoingNotifications[ack.IdCompany][ack.IdClient][ack.IdNotification].close <- true
 }
 
 func handleSse(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("Client: %v", r.RemoteAddr)
+	fmt.Printf("Client: %v\n", r.RemoteAddr)
 
 	flusher, ok := w.(http.Flusher)
 
@@ -85,16 +101,23 @@ func handleSse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		log.Fatalln(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	query := new(struct {
-		Destination string `schema:"destination"`
-		Id_Company  string `schema:"id_company"`
+		IdClient  string `schema:"id_client"`
+		IdCompany string `schema:"id_company"`
 	})
 
 	if err := schema.NewDecoder().Decode(query, r.Form); err != nil {
-		log.Fatalln(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if !(query.IdClient != "" && query.IdCompany != "") {
+		http.Error(w, "id_client and id_company not provided", http.StatusBadRequest)
+		return
 	}
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -103,24 +126,14 @@ func handleSse(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	ch := make(chan string)
-
-	if _, ok := client.Clients[query.Id_Company]; !ok {
-		fmt.Println(client.Clients, ok)
-		client.Clients[query.Id_Company] = append(client.Clients[query.Id_Company], ch)
+	if _, ok := client.Clients[query.IdCompany]; !ok {
+		client.Clients[query.IdCompany] = make(map[string]chan []byte)
+		fmt.Println("client hub for company registered")
 	}
 
-	go func() {
-		select {
-		case <-r.Context().Done():
-			fmt.Println("\nclient disconnected")
-			client.ClosingClients <- struct {
-				Id_Company  string
-				Destination string
-			}{Id_Company: query.Id_Company, Destination: query.Destination}
-			return
-		}
-	}()
+	ch := make(chan []byte)
+	client.Clients[query.IdCompany][query.IdClient] = ch
+	fmt.Println("client", query.IdClient, "registered in hub", query.IdCompany, "total", len(client.Clients[query.IdCompany]))
 
 	for {
 		fmt.Fprintf(w, "data: %s\n\n", <-ch)
@@ -129,33 +142,31 @@ func handleSse(w http.ResponseWriter, r *http.Request) {
 }
 
 var client = &Broker{
-	Notifier:       make(map[string]chan string),
-	MasterNotifier: make(chan struct{ Id_Company string }),
+	MasterNotifier: make(chan struct {
+		IdCompany      string
+		IdNotification string
+		Payload        map[string]string
+	}),
+	Notifier: make(map[string]chan string),
 	NewClients: make(chan struct {
-		Id_Company  string
-		Destination string
+		IdCompany string
+		IdClient  string
 	}),
 	ClosingClients: make(chan struct {
-		Id_Company  string
-		Destination string
+		IdCompany string
+		IdClient  string
 	}),
-	Clients: make(map[string][]chan string),
+	Clients: make(map[string]map[string]chan []byte),
 }
 
 func Listen() {
-	for {
-		select {
-		case c := <-client.ClosingClients:
-			delete(client.Clients, c.Destination)
-			log.Printf("Removed client. %d registered clients", len(client.Clients))
-		case c := <-client.MasterNotifier:
-			fmt.Println("received at master. to", c.Id_Company)
-			fmt.Println("should send to", client.Clients[c.Id_Company], client.MasterNotifier)
-			for _, ch := range client.Clients[c.Id_Company] {
-				ch <- "message to " + c.Id_Company
-			}
-		}
+	c := <-client.ClosingClients
+	delete(client.Clients[c.IdCompany], c.IdClient)
+
+	for _, cchan := range ongoingNotifications[c.IdCompany][c.IdClient] {
+		cchan.close <- true
 	}
+	log.Printf("Removed client %s. %d registered clients", c.IdClient, len(client.Clients))
 }
 
 func main() {
