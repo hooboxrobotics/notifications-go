@@ -57,6 +57,19 @@ func handleNotification(w http.ResponseWriter, r *http.Request) {
 		}
 		ongoingNotifications[p.IdCompany][clientId][idNotification] = nchan
 
+		go func() {
+			out, err := json.Marshal(struct {
+				IdNotification string
+				ClientId       string
+				Subject        string
+				Payload        map[string]interface{}
+			}{IdNotification: idNotification, ClientId: clientId, Payload: p.Payload, Subject: p.Subject})
+			if err != nil {
+				log.Fatalln(err)
+			}
+			client.Clients[p.IdCompany][clientId] <- out
+		}()
+
 		go func(n *dto.EmitNotification, clientId string, ch struct{ close chan bool }) {
 			timeout := time.After(time.Duration(n.ExpiresInSeconds) * time.Second)
 
